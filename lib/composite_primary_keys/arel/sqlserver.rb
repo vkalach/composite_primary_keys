@@ -1,36 +1,39 @@
 module Arel
   module Visitors
     class SQLServer < Arel::Visitors::ToSql
-      def make_Fetch_Possible_And_Deterministic o
-        return if o.limit.nil? && o.offset.nil?
-        t = table_From_Statement o
-        pk = primary_Key_From_Table t
-        return unless pk
-        if o.orders.empty?
-          # Prefer deterministic vs a simple `(SELECT NULL)` expr.
-          # CPK
-          #o.orders = [pk.asc]
-          o.orders = pk.map {|a_pk| a_pk.asc}
+      def table_From_Statement o
+        puts("GET TABLE #{Base64.encode64(Marshal.dump(o))}")
+        core = o.cores.first
+        if Arel::Table === core.from
+          core.from
+        elsif Arel::Nodes::SqlLiteral === core.from
+          Arel::Table.new(core.from)
+        elsif Arel::Nodes::JoinSource === core.source
+          Arel::Nodes::SqlLiteral === core.source.left ? Arel::Table.new(core.source.left, @engine) : core.source.left.left
         end
       end
 
       def primary_Key_From_Table t
         return unless t
-        column_name = @connection.schema_cache.primary_keys(t.name) ||
-          @connection.schema_cache.columns_hash(t.name).first.try(:second).try(:name)
+        puts("TABLE NAME IS #{t.name}")
 
-        # CPK
-        # column_name ? t[column_name] : nil
-        case column_name
-          when Array
-            column_name.map do |name|
-              t[name]
-            end
-          when NilClass
-            nil
-          else
-            [t[column_name]]
+        primary_keys = @connection.schema_cache.primary_keys(t.name)
+        column_name = nil
+        case primary_keys
+        when NilClass
+          column_name = @connection.schema_cache.columns_hash(t.name).first.try(:second).try(:name)
+          string_marshal = Marshal.dump(@connection.schema_cache)
+          puts("COLUMN NAME IF NIL: #{column_name} AND STRING FOR MARSHAL: '#{Base64.encode64(string_marshal)}'" )
+        when String
+          column_name = primary_keys
+        when Array
+          candidate_columns = @connection.schema_cache.columns_hash(t.name).slice(*primary_keys).values
+          candidate_column = candidate_columns.find(&:is_identity?)
+          candidate_column ||= candidate_columns.first
+          column_name = candidate_column.try(:name)
         end
+        puts("COLUMN NAME AS RESULT: #{column_name}")
+        column_name ? t[column_name] : nil
       end
     end
   end
